@@ -39,6 +39,7 @@ def cleanup_file(filepath: str):
         print(f"清理暫存檔失敗: {filepath}, 錯誤: {e}")
 
 @app.get("/api/health")
+@app.head("/api/health")
 async def health_check():
     return {"status": "ok", "service": "YouTube Downloader"}
 
@@ -102,6 +103,7 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
+@app.head("/")
 async def root():
     index_file = os.path.join(static_dir, "index.html")
     if os.path.exists(index_file):

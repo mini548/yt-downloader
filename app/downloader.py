@@ -32,16 +32,45 @@ def sanitize_filename(name: str) -> str:
     # Remove characters unsafe for filenames
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def extract_video_info(url: str) -> Dict[str, Any]:
+def get_base_ydl_opts() -> Dict[str, Any]:
+    """Generates base yt-dlp options with multi-client fallbacks for cloud/datacenter IPs."""
     ffmpeg_bin = get_ffmpeg_path()
-    ydl_opts: Dict[str, Any] = {
+    opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
-        "skip_download": True,
-        "extract_flat": False,
+        "nocheckcertificate": True,
+        "extractor_args": {
+            "youtube": {
+                # Fallback clients bypass datacenter IP player extraction block
+                "player_client": ["android", "ios", "tv_samsung", "web"]
+            }
+        }
     }
     if ffmpeg_bin:
-        ydl_opts["ffmpeg_location"] = ffmpeg_bin
+        opts["ffmpeg_location"] = ffmpeg_bin
+
+    # Cookie support: Check YTDLP_COOKIES environment variable or cookies.txt file
+    cookies_env = os.environ.get("YTDLP_COOKIES")
+    cookie_file = os.path.join(os.path.dirname(__file__), "cookies.txt")
+    if cookies_env and cookies_env.strip():
+        temp_cookie = os.path.join(os.path.dirname(__file__), "temp_cookies.txt")
+        try:
+            with open(temp_cookie, "w", encoding="utf-8") as f:
+                f.write(cookies_env.strip())
+            opts["cookiefile"] = temp_cookie
+        except Exception:
+            pass
+    elif os.path.exists(cookie_file):
+        opts["cookiefile"] = cookie_file
+
+    return opts
+
+def extract_video_info(url: str) -> Dict[str, Any]:
+    ydl_opts = get_base_ydl_opts()
+    ydl_opts.update({
+        "skip_download": True,
+        "extract_flat": False,
+    })
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -68,9 +97,8 @@ def extract_video_info(url: str) -> Dict[str, Any]:
         common_resolutions = [2160, 1440, 1080, 720, 480, 360]
         video_options = []
         for res in common_resolutions:
-            # Check if there is any format >= res or exactly res
             matched = [h for h in available_heights if h >= res]
-            if matched or res <= 720: # 720 and 360 are usually universally downscalable
+            if matched or res <= 720:
                 label = f"{res}p"
                 if res >= 2160:
                     label = "4K (2160p)"
@@ -81,7 +109,6 @@ def extract_video_info(url: str) -> Dict[str, Any]:
                 elif res == 720:
                     label = "HD (720p)"
                 
-                # Only include if actually available or base fallback
                 if any(h == res for h in available_heights) or (res in [720, 360] and len(available_heights) > 0):
                     video_options.append({
                         "quality": str(res),
@@ -115,18 +142,11 @@ def extract_video_info(url: str) -> Dict[str, Any]:
 def download_video(url: str, format_type: str, quality: str, output_dir: str) -> str:
     """Downloads video or audio and returns the generated absolute file path."""
     os.makedirs(output_dir, exist_ok=True)
-    ffmpeg_bin = get_ffmpeg_path()
     file_id = uuid.uuid4().hex[:8]
     out_template = os.path.join(output_dir, f"{file_id}_%(title).100B.%(ext)s")
 
-    ydl_opts: Dict[str, Any] = {
-        "outtmpl": out_template,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-    }
-    if ffmpeg_bin:
-        ydl_opts["ffmpeg_location"] = ffmpeg_bin
+    ydl_opts = get_base_ydl_opts()
+    ydl_opts["outtmpl"] = out_template
 
     if format_type == "audio":
         if quality == "m4a":
