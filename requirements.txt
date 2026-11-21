@@ -1,5 +1,5 @@
 fastapi>=0.110.0
 uvicorn>=0.28.0
 yt-dlp>=2024.1.1
-yt-dlp-ejs>=0.8.0
+bgutil-ytdlp-pot-provider>=2.0.0
 imageio-ffmpeg>=0.4.9
