@@ -2,7 +2,6 @@ import os
 import shutil
 import uuid
 import re
-import tempfile
 from typing import Dict, Any, Optional
 import yt_dlp
 import imageio_ffmpeg
@@ -32,11 +31,10 @@ def format_duration(seconds: Optional[int]) -> str:
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def get_base_ydl_opts(use_cookies: bool = True, force_android: bool = False) -> Dict[str, Any]:
+def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Generates base yt-dlp options.
-    If force_android is True or no valid cookies exist, falls back to Android client
-    which reliably avoids datacenter bot blocks without requiring browser cookies.
+    Generates base yt-dlp options using android and web client fallbacks.
+    Does not use expired browser cookies which trigger Google bot-check locks.
     """
     ffmpeg_bin = get_ffmpeg_path()
     opts: Dict[str, Any] = {
@@ -44,50 +42,18 @@ def get_base_ydl_opts(use_cookies: bool = True, force_android: bool = False) -> 
         "no_warnings": True,
         "nocheckcertificate": True,
         "source_address": "0.0.0.0",  # Force IPv4 to avoid datacenter IPv6 blocks
-        "js_runtimes": {"node": {}},
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
+            }
+        }
     }
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
 
-    cookie_path = None
-    if use_cookies and not force_android:
-        cookies_env = os.environ.get("YTDLP_COOKIES")
-        cookie_candidates = [
-            os.path.join(os.path.dirname(__file__), "cookies.txt"),
-            os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt"),
-            os.path.abspath("cookies.txt"),
-            "cookies.txt"
-        ]
-        
-        if cookies_env and cookies_env.strip():
-            cleaned_cookies = cookies_env.strip().replace("\\n", "\n").replace("\\t", "\t")
-            temp_cookie = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
-            try:
-                with open(temp_cookie, "w", encoding="utf-8") as f:
-                    f.write(cleaned_cookies)
-                cookie_path = temp_cookie
-            except Exception as e:
-                print(f"[WARN] 寫入暫存 Cookie 失敗: {e}")
-        else:
-            for cp in cookie_candidates:
-                if os.path.exists(cp) and os.path.getsize(cp) > 0:
-                    cookie_path = cp
-                    break
-
-    if cookie_path and not force_android:
-        opts["cookiefile"] = cookie_path
-    else:
-        # Default to Android client which bypasses bot challenges on cloud servers
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["android"]
-            }
-        }
-
     return opts
 
 def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
-    # In case of playlist, take first entry
     if "entries" in info:
         entries = list(info["entries"])
         if not entries:
@@ -96,7 +62,6 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
 
     formats = info.get("formats", [])
     
-    # Determine available resolutions
     available_heights = set()
     for f in formats:
         h = f.get("height")
@@ -148,40 +113,26 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
     }
 
 def extract_video_info(url: str) -> Dict[str, Any]:
-    # First attempt: standard opts (with cookies if available, otherwise android client)
-    ydl_opts = get_base_ydl_opts(use_cookies=True, force_android=False)
+    ydl_opts = get_base_ydl_opts()
     ydl_opts.update({
         "skip_download": True,
         "extract_flat": False,
         "format": "all",
     })
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise ValueError("無法解析影片資訊，請確認網址是否正確。")
-            return _parse_info_data(info, url)
-    except Exception as e:
-        err_msg = str(e)
-        # If bot check, cookie expiration, or format error occurred, retry with forced Android client
-        if any(keyword in err_msg for keyword in ["Sign in", "bot", "cookie", "format", "unavailable"]):
-            print(f"[INFO] 遭遇限制 ({err_msg[:60]}...)，自動切換至 Android Client 重試...")
-            fallback_opts = get_base_ydl_opts(use_cookies=False, force_android=True)
-            fallback_opts.update({
-                "skip_download": True,
-                "extract_flat": False,
-                "format": "all",
-            })
-            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise ValueError("無法解析影片資訊，請確認網址是否正確。")
-                return _parse_info_data(info, url)
-        raise e
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if not info:
+            raise ValueError("無法解析影片資訊，請確認網址是否正確。")
+        return _parse_info_data(info, url)
 
-def _execute_download(url: str, format_type: str, quality: str, output_dir: str, ydl_opts: Dict[str, Any], file_id: str) -> str:
+def download_video(url: str, format_type: str, quality: str, output_dir: str) -> str:
+    """Downloads video or audio and returns the generated absolute file path."""
+    os.makedirs(output_dir, exist_ok=True)
+    file_id = uuid.uuid4().hex[:8]
     out_template = os.path.join(output_dir, f"{file_id}_%(title).100B.%(ext)s")
+
+    ydl_opts = get_base_ydl_opts()
     ydl_opts["outtmpl"] = out_template
 
     if format_type == "audio":
@@ -222,21 +173,3 @@ def _execute_download(url: str, format_type: str, quality: str, output_dir: str,
                 return base + ext
 
         raise FileNotFoundError("檔案下載完成但找不到輸出檔案。")
-
-def download_video(url: str, format_type: str, quality: str, output_dir: str) -> str:
-    """Downloads video or audio and returns the generated absolute file path."""
-    os.makedirs(output_dir, exist_ok=True)
-    file_id = uuid.uuid4().hex[:8]
-
-    # Attempt 1: standard options
-    ydl_opts = get_base_ydl_opts(use_cookies=True, force_android=False)
-    try:
-        return _execute_download(url, format_type, quality, output_dir, ydl_opts, file_id)
-    except Exception as e:
-        err_msg = str(e)
-        if any(keyword in err_msg for keyword in ["Sign in", "bot", "cookie", "format", "unavailable"]):
-            print(f"[INFO] 下載時遭遇限制 ({err_msg[:60]}...)，切換至 Android Client 重試...")
-            file_id_fallback = uuid.uuid4().hex[:8]
-            fallback_opts = get_base_ydl_opts(use_cookies=False, force_android=True)
-            return _execute_download(url, format_type, quality, output_dir, fallback_opts, file_id_fallback)
-        raise e
