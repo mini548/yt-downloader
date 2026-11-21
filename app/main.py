@@ -41,18 +41,22 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "4.3.0-pot-extract"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "4.3.1-skip"}
 
 @app.get("/api/test_pot_extract")
-async def test_pot_extract(vid: str = "jNQXAC9IVRw"):
+async def test_pot_extract(vid: str = "jNQXAC9IVRw", skip: bool = True):
     import yt_dlp
+    extractor_args = {
+        "player_client": ["android", "ios", "mweb", "web"]
+    }
+    if skip:
+        extractor_args["player_skip"] = ["configs", "webpage"]
+    
     opts = {
         "quiet": True,
         "format": "all",
         "extractor_args": {
-            "youtube": {
-                "player_client": ["mweb", "web"]
-            }
+            "youtube": extractor_args
         }
     }
     try:
