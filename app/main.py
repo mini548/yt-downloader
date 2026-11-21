@@ -12,10 +12,10 @@ from .downloader import extract_video_info, download_video, sanitize_filename
 app = FastAPI(
     title="YouTube Downloader Web App",
     description="全球通用的 YouTube 高畫質影片與 MP3 下載服務",
-    version="3.0.0"
+    version="1.0.0"
 )
 
-# Enable CORS for all origins
+# 允許所有跨域請求 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,7 +31,7 @@ class InfoRequest(BaseModel):
     url: str
 
 def cleanup_file(filepath: str):
-    """Deletes temporary file after response is completed."""
+    """下載傳輸完成後自動刪除伺服器上的暫存檔案"""
     try:
         if os.path.exists(filepath):
             os.remove(filepath)
@@ -41,105 +41,7 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "4.3.1-skip"}
-
-@app.get("/api/test_pot_extract")
-async def test_pot_extract(vid: str = "jNQXAC9IVRw", skip: bool = True):
-    import yt_dlp
-    extractor_args = {
-        "player_client": ["android", "ios", "mweb", "web"]
-    }
-    if skip:
-        extractor_args["player_skip"] = ["configs", "webpage"]
-    
-    opts = {
-        "quiet": True,
-        "format": "all",
-        "extractor_args": {
-            "youtube": extractor_args
-        }
-    }
-    try:
-        def _run():
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
-        info = await asyncio.to_thread(_run)
-        return {"status": "ok", "title": info.get("title"), "formats": len(info.get("formats", []))}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-pot_process = None
-
-@app.on_event("startup")
-async def start_pot_server():
-    global pot_process
-    bin_path = "/usr/local/bin/bgutil-pot"
-    if os.path.exists(bin_path):
-        import subprocess
-        try:
-            pot_process = subprocess.Popen(
-                [bin_path, "server", "--host", "127.0.0.1", "--port", "4416"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            print(f"[INFO] 成功啟動 PO Token Server (PID {pot_process.pid})！")
-        except Exception as e:
-            print(f"[WARN] 啟動 PO Token Server 失敗: {e}")
-
-@app.get("/api/ping_pot")
-async def ping_pot():
-    import urllib.request
-    global pot_process
-    poll_code = pot_process.poll() if pot_process else None
-    process_info = {
-        "running": pot_process is not None and poll_code is None,
-        "pid": pot_process.pid if pot_process else None,
-        "returncode": poll_code,
-    }
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=3) as resp:
-            return {
-                "process": process_info,
-                "pot_status": resp.status,
-                "pot_body": resp.read().decode()
-            }
-    except Exception as e:
-        stderr_output = ""
-        if pot_process and pot_process.stderr:
-            try:
-                stderr_output = pot_process.stderr.read()
-            except Exception:
-                pass
-        return {
-            "process": process_info,
-            "stderr": stderr_output,
-            "pot_error": str(e)
-        }
-
-@app.get("/api/test_pot_bin")
-async def test_pot_bin():
-    import subprocess
-    cmd = ["/usr/local/bin/bgutil-pot", "server", "--help"]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        return {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/api/ping_yt")
-async def ping_yt():
-    import subprocess
-    cmd_deno = ["deno", "--version"]
-    cmd_curl = ["curl", "-sI", "--connect-timeout", "5", "https://www.youtube.com"]
-    
-    deno_res = subprocess.run(cmd_deno, capture_output=True, text=True)
-    curl_res = subprocess.run(cmd_curl, capture_output=True, text=True)
-    
-    return {
-        "deno": deno_res.stdout.strip() if deno_res.returncode == 0 else f"ERR: {deno_res.stderr}",
-        "curl_yt": curl_res.stdout.strip() if curl_res.returncode == 0 else f"ERR: {curl_res.stderr}",
-    }
+    return {"status": "ok", "service": "YouTube Downloader", "version": "1.0.0"}
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
@@ -156,7 +58,7 @@ async def download_endpoint(
     background_tasks: BackgroundTasks,
     url: str = Query(..., description="YouTube 影片網址"),
     format_type: str = Query("video", pattern="^(video|audio)$"),
-    quality: str = Query("1080", description="畫質 (例如 1080, 720) 或 音質 (例如 320, 192, m4a)")
+    quality: str = Query("1080", description="畫質 (例如 1080, 720, best) 或 音質 (例如 320, 192, m4a)")
 ):
     try:
         filepath = await asyncio.to_thread(
@@ -172,6 +74,7 @@ async def download_endpoint(
 
         quoted_filename = urllib.parse.quote(display_filename)
 
+        # 請求完成後自動清理伺服器暫存
         background_tasks.add_task(cleanup_file, filepath)
 
         media_type = "video/mp4" if format_type == "video" else "audio/mpeg"
@@ -191,7 +94,7 @@ async def download_endpoint(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"下載過程發生錯誤: {str(e)}")
 
-# Mount static files for the web frontend
+# 掛載前端靜態檔案
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
