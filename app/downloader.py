@@ -80,26 +80,22 @@ def format_duration(seconds: Optional[int]) -> str:
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def get_base_ydl_opts() -> Dict[str, Any]:
-    """生成包含憑證、多客戶端與 PO Token 整合的 yt-dlp 核心參數"""
+def get_base_ydl_opts(with_cookies: bool = True) -> Dict[str, Any]:
+    """生成包含憑證與多客戶端設定的 yt-dlp 核心參數"""
     ffmpeg_bin = get_ffmpeg_path()
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
         "source_address": "0.0.0.0",
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["ios", "android", "mweb", "web"]
-            }
-        }
     }
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
 
-    cookie_file = get_cookie_file()
-    if cookie_file and os.path.exists(cookie_file):
-        opts["cookiefile"] = cookie_file
+    if with_cookies:
+        cookie_file = get_cookie_file()
+        if cookie_file and os.path.exists(cookie_file):
+            opts["cookiefile"] = cookie_file
 
     return opts
 
@@ -166,7 +162,7 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
     }
 
 def extract_video_info(url: str) -> Dict[str, Any]:
-    ydl_opts = get_base_ydl_opts()
+    ydl_opts = get_base_ydl_opts(with_cookies=True)
     ydl_opts.update({
         "skip_download": True,
         "extract_flat": False,
@@ -176,90 +172,96 @@ def extract_video_info(url: str) -> Dict[str, Any]:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            if not info:
-                raise ValueError("無法解析影片資訊，請確認網址是否正確。")
-            return _parse_info_data(info, url)
+            if info:
+                return _parse_info_data(info, url)
+    except Exception:
+        pass
+
+    # 備用重試策略：改用 android 客戶端（無 Cookie，防止 SABR 與格式遺失）
+    try:
+        fallback_opts = get_base_ydl_opts(with_cookies=False)
+        fallback_opts.update({
+            "skip_download": True,
+            "extract_flat": False,
+            "format": "all",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"]
+                }
+            }
+        })
+        with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info:
+                return _parse_info_data(info, url)
     except Exception as e:
-        err_msg = str(e)
-        if "not a bot" in err_msg or "Sign in" in err_msg:
-            # 遭遇風控時，依序使用備用客戶端重試
-            for fallback_client in [["android"], ["ios"], ["mweb"]]:
-                try:
-                    retry_opts = get_base_ydl_opts()
-                    retry_opts.update({
-                        "skip_download": True,
-                        "extract_flat": False,
-                        "format": "all",
-                        "extractor_args": {
-                            "youtube": {
-                                "player_client": fallback_client
-                            }
-                        }
-                    })
-                    with yt_dlp.YoutubeDL(retry_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        if info:
-                            return _parse_info_data(info, url)
-                except Exception:
-                    continue
-        raise e
+        raise ValueError(f"無法解析影片資訊: {e}")
+
+    raise ValueError("無法解析影片資訊，請確認網址是否正確。")
 
 def download_video(url: str, format_type: str, quality: str, output_dir: str) -> str:
-    """下載影片或音訊，支援自動重試與客戶端降級"""
+    """下載影片或音訊，支援多層客戶端智慧降級重試"""
     os.makedirs(output_dir, exist_ok=True)
     file_id = uuid.uuid4().hex[:8]
     out_template = os.path.join(output_dir, f"{file_id}_%(title).100B.%(ext)s")
 
-    ydl_opts = get_base_ydl_opts()
-    ydl_opts["outtmpl"] = out_template
+    def _build_opts(with_cookies: bool, client: Optional[str] = None):
+        opts = get_base_ydl_opts(with_cookies=with_cookies)
+        opts["outtmpl"] = out_template
+        if client:
+            opts["extractor_args"] = {"youtube": {"player_client": [client]}}
 
-    if format_type == "audio":
-        ydl_opts["format"] = "ba/b"
-        if quality == "m4a":
-            ydl_opts["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-            }]
+        if format_type == "audio":
+            opts["format"] = "ba/b"
+            if quality == "m4a":
+                opts["postprocessors"] = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "m4a",
+                }]
+            else:
+                opts["postprocessors"] = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": quality if quality in ["128", "192", "320"] else "192",
+                }]
         else:
-            ydl_opts["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": quality if quality in ["128", "192", "320"] else "192",
-            }]
-    else:
-        if quality and quality.isdigit():
-            h = int(quality)
-            ydl_opts["format"] = f"bv*[height<={h}]+ba/b[height<={h}]/b[height<={h}]/bv*+ba/b/b"
-        else:
-            ydl_opts["format"] = "bv*+ba/b/b"
-        
-        ydl_opts["merge_output_format"] = "mp4"
+            if quality and quality.isdigit():
+                h = int(quality)
+                opts["format"] = f"bv*[height<={h}]+ba/b[height<={h}]/b[height<={h}]/bv*+ba/b/b"
+            else:
+                opts["format"] = "bv*+ba/b/b"
+            opts["merge_output_format"] = "mp4"
 
+        return opts
+
+    # 嘗試 1: 使用標準帶憑證選項
+    info = None
     try:
+        ydl_opts = _build_opts(with_cookies=True)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
     except Exception as e:
-        err_msg = str(e)
-        if "not a bot" in err_msg or "Sign in" in err_msg:
-            # 降級重試
-            retry_opts = ydl_opts.copy()
-            retry_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+        print(f"[WARN] 預設下載失敗 ({e})，正在嘗試使用 Android 原生客戶端下載...")
+        # 嘗試 2: 使用 Android 客戶端 (無 Cookie，繞過 SABR 與格式缺失)
+        try:
+            retry_opts = _build_opts(with_cookies=False, client="android")
             with yt_dlp.YoutubeDL(retry_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-        else:
-            raise e
+        except Exception as retry_e:
+            raise retry_e
 
-    # 尋找產生檔案
+    # 尋找輸出檔案
     for fname in os.listdir(output_dir):
         if fname.startswith(file_id):
             return os.path.join(output_dir, fname)
 
-    prepared = ydl.prepare_filename(info)
-    if os.path.exists(prepared):
-        return prepared
-    base, _ = os.path.splitext(prepared)
-    for ext in [".mp4", ".mp3", ".m4a", ".webm", ".mkv"]:
-        if os.path.exists(base + ext):
-            return base + ext
+    if info:
+        prepared = ydl.prepare_filename(info)
+        if os.path.exists(prepared):
+            return prepared
+        base, _ = os.path.splitext(prepared)
+        for ext in [".mp4", ".mp3", ".m4a", ".webm", ".mkv"]:
+            if os.path.exists(base + ext):
+                return base + ext
 
     raise FileNotFoundError("檔案下載完成但找不到輸出檔案。")
