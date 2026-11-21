@@ -22,4 +22,4 @@ COPY . .
 ENV PORT=10000
 EXPOSE 10000
 
-CMD sh -c "bgutil-pot & uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"
+CMD sh -c "bgutil-pot server & uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"
