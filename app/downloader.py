@@ -2,6 +2,7 @@ import os
 import shutil
 import uuid
 import re
+import tempfile
 from typing import Dict, Any, Optional
 import yt_dlp
 import imageio_ffmpeg
@@ -40,29 +41,46 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         "no_warnings": True,
         "nocheckcertificate": True,
         "js_runtimes": {"node": {}},
-        "extractor_args": {
-            "youtube": {
-                # Fallback clients bypass datacenter IP player extraction block
-                "player_client": ["android", "ios", "tv_samsung", "web"]
-            }
-        }
     }
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
 
     # Cookie support: Check YTDLP_COOKIES environment variable or cookies.txt file
     cookies_env = os.environ.get("YTDLP_COOKIES")
-    cookie_file = os.path.join(os.path.dirname(__file__), "cookies.txt")
+    cookie_candidates = [
+        os.path.join(os.path.dirname(__file__), "cookies.txt"), # app/cookies.txt
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt"), # root cookies.txt
+        os.path.abspath("cookies.txt"),
+        "cookies.txt"
+    ]
+    
+    cookie_path = None
     if cookies_env and cookies_env.strip():
-        temp_cookie = os.path.join(os.path.dirname(__file__), "temp_cookies.txt")
+        cleaned_cookies = cookies_env.strip().replace("\\n", "\n").replace("\\t", "\t")
+        temp_cookie = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
         try:
             with open(temp_cookie, "w", encoding="utf-8") as f:
-                f.write(cookies_env.strip())
-            opts["cookiefile"] = temp_cookie
-        except Exception:
-            pass
-    elif os.path.exists(cookie_file):
-        opts["cookiefile"] = cookie_file
+                f.write(cleaned_cookies)
+            cookie_path = temp_cookie
+            print("[INFO] 成功從環境變數 YTDLP_COOKIES 載入 Cookie 設定！")
+        except Exception as e:
+            print(f"[WARN] 寫入暫存 Cookie 失敗: {e}")
+    else:
+        for cp in cookie_candidates:
+            if os.path.exists(cp):
+                cookie_path = cp
+                print(f"[INFO] 成功從檔案載入 Cookie: {cp}")
+                break
+
+    if cookie_path:
+        opts["cookiefile"] = cookie_path
+    else:
+        # Fallback clients only when NO cookies are present (helps unauthenticated datacenter requests)
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "ios", "tv_samsung", "web"]
+            }
+        }
 
     return opts
 
