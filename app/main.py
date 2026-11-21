@@ -51,20 +51,32 @@ async def diag_check():
         "ytdlp_cookies_len": len(cookies_env) if cookies_env else 0,
     }
 
-@app.get("/api/test_android")
-async def test_android():
+@app.get("/api/test_clients")
+async def test_clients():
     import yt_dlp
-    opts = {
-        "quiet": True,
-        "format": "all",
-        "extractor_args": {"youtube": {"player_client": ["android"]}}
-    }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
-            return {"status": "ok", "title": info.get("title")}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    clients_to_test = [
+        "android",
+        "android_vr",
+        "ios",
+        "mweb",
+        "web_embedded",
+        "tv",
+        "web_safari"
+    ]
+    results = {}
+    for c in clients_to_test:
+        opts = {
+            "quiet": True,
+            "format": "all",
+            "extractor_args": {"youtube": {"player_client": [c]}}
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = await asyncio.to_thread(ydl.extract_info, "https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
+                results[c] = f"SUCCESS: {info.get('title')}"
+        except Exception as e:
+            results[c] = f"FAIL: {str(e)[:80]}"
+    return results
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
