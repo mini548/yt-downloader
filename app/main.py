@@ -41,7 +41,23 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "3.0.0"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "3.0.1"}
+
+@app.get("/api/debug_verbose")
+async def debug_verbose(vid: str = "jNQXAC9IVRw"):
+    import subprocess
+    cmd = ["yt-dlp", "-v", "--simulate", f"https://www.youtube.com/watch?v={vid}"]
+    try:
+        res = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=25
+        )
+        return {
+            "stdout": res.stdout,
+            "stderr": res.stderr,
+            "returncode": res.returncode
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
