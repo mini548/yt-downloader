@@ -41,7 +41,7 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "4.0.1-pot"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "4.1.0-pot-server"}
 
 @app.get("/api/ping_pot")
 async def ping_pot():
@@ -55,7 +55,7 @@ async def ping_pot():
 @app.get("/api/test_pot_bin")
 async def test_pot_bin():
     import subprocess
-    cmd = ["/usr/local/bin/bgutil-pot", "--help"]
+    cmd = ["/usr/local/bin/bgutil-pot", "server", "--help"]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         return {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
