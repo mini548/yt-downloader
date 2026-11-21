@@ -41,7 +41,16 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "4.0.0-pot"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "4.0.1-pot"}
+
+@app.get("/api/ping_pot")
+async def ping_pot():
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=3) as resp:
+            return {"pot_status": resp.status, "pot_body": resp.read().decode()}
+    except Exception as e:
+        return {"pot_error": str(e)}
 
 @app.get("/api/ping_yt")
 async def ping_yt():
