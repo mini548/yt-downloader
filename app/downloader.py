@@ -80,14 +80,23 @@ def format_duration(seconds: Optional[int]) -> str:
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def get_base_ydl_opts(with_cookies: bool = True) -> Dict[str, Any]:
-    """生成包含憑證與多客戶端設定的 yt-dlp 核心參數"""
+def get_base_ydl_opts(with_cookies: bool = True, client: Optional[str] = None) -> Dict[str, Any]:
+    """生成包含憑證、player_skip 與多客戶端設定的 yt-dlp 核心參數"""
     ffmpeg_bin = get_ffmpeg_path()
+    youtube_args: Dict[str, Any] = {
+        "player_skip": ["configs", "webpage"]
+    }
+    if client:
+        youtube_args["player_client"] = [client]
+
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
         "source_address": "0.0.0.0",
+        "extractor_args": {
+            "youtube": youtube_args
+        }
     }
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
@@ -162,35 +171,45 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
     }
 
 def extract_video_info(url: str) -> Dict[str, Any]:
-    ydl_opts = get_base_ydl_opts(with_cookies=True)
-    ydl_opts.update({
-        "skip_download": True,
-        "extract_flat": False,
-        "format": "all",
-    })
-
+    # 策略 1: 優先使用憑證 (Cookies) 搭配 player_skip
     try:
+        ydl_opts = get_base_ydl_opts(with_cookies=True)
+        ydl_opts.update({
+            "skip_download": True,
+            "extract_flat": False,
+            "format": "all",
+        })
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if info:
                 return _parse_info_data(info, url)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WARN] 憑證解析未命中 ({e})，正在嘗試 Android 原生客戶端解析...")
 
-    # 備用重試策略：改用 android 客戶端（無 Cookie，防止 SABR 與格式遺失）
+    # 策略 2: 降級為 Android 客戶端 (免 Cookie，完全避開 Web/SABR 格式遺失問題)
     try:
-        fallback_opts = get_base_ydl_opts(with_cookies=False)
+        fallback_opts = get_base_ydl_opts(with_cookies=False, client="android")
         fallback_opts.update({
             "skip_download": True,
             "extract_flat": False,
             "format": "all",
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android"]
-                }
-            }
         })
         with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info:
+                return _parse_info_data(info, url)
+    except Exception as e:
+        print(f"[WARN] Android 解析失敗 ({e})，正在嘗試 iOS 客戶端解析...")
+
+    # 策略 3: 降級為 iOS 客戶端
+    try:
+        ios_opts = get_base_ydl_opts(with_cookies=False, client="ios")
+        ios_opts.update({
+            "skip_download": True,
+            "extract_flat": False,
+            "format": "all",
+        })
+        with yt_dlp.YoutubeDL(ios_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if info:
                 return _parse_info_data(info, url)
@@ -206,10 +225,8 @@ def download_video(url: str, format_type: str, quality: str, output_dir: str) ->
     out_template = os.path.join(output_dir, f"{file_id}_%(title).100B.%(ext)s")
 
     def _build_opts(with_cookies: bool, client: Optional[str] = None):
-        opts = get_base_ydl_opts(with_cookies=with_cookies)
+        opts = get_base_ydl_opts(with_cookies=with_cookies, client=client)
         opts["outtmpl"] = out_template
-        if client:
-            opts["extractor_args"] = {"youtube": {"player_client": [client]}}
 
         if format_type == "audio":
             opts["format"] = "ba/b"
@@ -234,21 +251,21 @@ def download_video(url: str, format_type: str, quality: str, output_dir: str) ->
 
         return opts
 
-    # 嘗試 1: 使用標準帶憑證選項
     info = None
-    try:
-        ydl_opts = _build_opts(with_cookies=True)
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except Exception as e:
-        print(f"[WARN] 預設下載失敗 ({e})，正在嘗試使用 Android 原生客戶端下載...")
-        # 嘗試 2: 使用 Android 客戶端 (無 Cookie，繞過 SABR 與格式缺失)
+    last_err = None
+    for attempt_cookies, attempt_client in [(True, None), (False, "android"), (False, "ios")]:
         try:
-            retry_opts = _build_opts(with_cookies=False, client="android")
-            with yt_dlp.YoutubeDL(retry_opts) as ydl:
+            ydl_opts = _build_opts(with_cookies=attempt_cookies, client=attempt_client)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-        except Exception as retry_e:
-            raise retry_e
+                if info:
+                    break
+        except Exception as e:
+            last_err = e
+            print(f"[WARN] 下載重試中 (cookies={attempt_cookies}, client={attempt_client}): {e}")
+
+    if not info and last_err:
+        raise last_err
 
     # 尋找輸出檔案
     for fname in os.listdir(output_dir):
