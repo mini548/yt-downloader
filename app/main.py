@@ -41,7 +41,7 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "2.0.0-android"}
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
