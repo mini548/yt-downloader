@@ -39,6 +39,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
+        "js_runtimes": {"node": {}},
         "extractor_args": {
             "youtube": {
                 # Fallback clients bypass datacenter IP player extraction block
@@ -149,26 +150,26 @@ def download_video(url: str, format_type: str, quality: str, output_dir: str) ->
     ydl_opts["outtmpl"] = out_template
 
     if format_type == "audio":
+        # Robust audio selection: grab best audio regardless of container, then convert/extract
+        ydl_opts["format"] = "ba/b"
         if quality == "m4a":
-            ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
+            ydl_opts["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "m4a",
+            }]
         else:
-            ydl_opts["format"] = "bestaudio/best"
             ydl_opts["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": quality if quality in ["128", "192", "320"] else "192",
             }]
     else:
-        # Video download
+        # Robust universal video selector with height cap and multi-tier fallback
         if quality and quality.isdigit():
             h = int(quality)
-            ydl_opts["format"] = (
-                f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
-                f"bestvideo[height<={h}]+bestaudio/"
-                f"best[height<={h}]/best"
-            )
+            ydl_opts["format"] = f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b"
         else:
-            ydl_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+            ydl_opts["format"] = "bv*+ba/b"
         
         ydl_opts["merge_output_format"] = "mp4"
 
