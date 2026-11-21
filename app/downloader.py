@@ -33,18 +33,20 @@ def sanitize_filename(name: str) -> str:
 
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Generates base yt-dlp options using android and web client fallbacks.
-    Does not use expired browser cookies which trigger Google bot-check locks.
+    Generates base yt-dlp options.
+    Uses mobile and multi-client APIs while skipping HTML webpage downloads
+    to bypass cloud datacenter IP 429/bot rate limits completely.
     """
     ffmpeg_bin = get_ffmpeg_path()
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
-        "source_address": "0.0.0.0",  # Force IPv4 to avoid datacenter IPv6 blocks
+        "source_address": "0.0.0.0",
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"]
+                "player_client": ["android", "ios", "mweb"],
+                "player_skip": ["configs", "webpage"]
             }
         }
     }
@@ -92,6 +94,10 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
                 "label": label,
                 "ext": "mp4"
             })
+
+    # Ensure at least one standard video option is available
+    if len(video_options) == 1:
+        video_options.append({"quality": "360", "label": "標準 (360p)", "ext": "mp4"})
 
     audio_options = [
         {"quality": "320", "label": "超高音質 (MP3 320kbps)", "ext": "mp3"},
