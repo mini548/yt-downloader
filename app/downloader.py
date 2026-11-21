@@ -13,13 +13,8 @@ import imageio_ffmpeg
 GUEST_COOKIE_FILE = os.path.join(tempfile.gettempdir(), "yt_guest_cookies.txt")
 
 def ensure_guest_cookies() -> str:
-    """
-    Ensures a fresh, valid YouTube visitor/guest cookie file exists.
-    Guest cookies bypass datacenter bot detection and player response failures
-    without requiring personal login credentials that rotate and expire.
-    """
+    """產生 YouTube 訪客憑證 (作為備用)"""
     now = time.time()
-    # Refresh every 6 hours or if missing
     if os.path.exists(GUEST_COOKIE_FILE) and (now - os.path.getmtime(GUEST_COOKIE_FILE)) < 21600:
         return GUEST_COOKIE_FILE
 
@@ -36,14 +31,32 @@ def ensure_guest_cookies() -> str:
         with opener.open(req, timeout=10) as resp:
             pass
         cj.save(ignore_discard=True, ignore_expires=True)
-        print(f"[INFO] 成功產生 YouTube 訪客憑證: {GUEST_COOKIE_FILE}")
         return GUEST_COOKIE_FILE
     except Exception as e:
         print(f"[WARN] 產生訪客憑證失敗: {e}")
         return ""
 
+def get_cookie_file() -> Optional[str]:
+    """優先取得使用者提供的 cookies.txt，若無則降級為訪客憑證"""
+    # 1. 專案根目錄的 cookies.txt
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root_cookie = os.path.join(project_root, "cookies.txt")
+    if os.path.exists(root_cookie) and os.path.getsize(root_cookie) > 50:
+        return root_cookie
+
+    # 2. 容器根目錄 /app/cookies.txt
+    if os.path.exists("/app/cookies.txt") and os.path.getsize("/app/cookies.txt") > 50:
+        return "/app/cookies.txt"
+
+    # 3. 訪客 Cookie
+    guest = ensure_guest_cookies()
+    if guest and os.path.exists(guest):
+        return guest
+
+    return None
+
 def get_ffmpeg_path() -> Optional[str]:
-    """Finds ffmpeg from system PATH or falls back to imageio-ffmpeg binary."""
+    """尋找系統 FFmpeg 或 imageio-ffmpeg 二進位檔"""
     which_ffmpeg = shutil.which("ffmpeg")
     if which_ffmpeg:
         return which_ffmpeg
@@ -68,20 +81,23 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 def get_base_ydl_opts() -> Dict[str, Any]:
-    """
-    Generates base yt-dlp options with dynamic visitor session cookies.
-    """
+    """生成包含憑證、多客戶端與 PO Token 整合的 yt-dlp 核心參數"""
     ffmpeg_bin = get_ffmpeg_path()
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
         "source_address": "0.0.0.0",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["ios", "android", "mweb", "web"]
+            }
+        }
     }
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
 
-    cookie_file = ensure_guest_cookies()
+    cookie_file = get_cookie_file()
     if cookie_file and os.path.exists(cookie_file):
         opts["cookiefile"] = cookie_file
 
@@ -157,14 +173,39 @@ def extract_video_info(url: str) -> Dict[str, Any]:
         "format": "all",
     })
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if not info:
-            raise ValueError("無法解析影片資訊，請確認網址是否正確。")
-        return _parse_info_data(info, url)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ValueError("無法解析影片資訊，請確認網址是否正確。")
+            return _parse_info_data(info, url)
+    except Exception as e:
+        err_msg = str(e)
+        if "not a bot" in err_msg or "Sign in" in err_msg:
+            # 遭遇風控時，依序使用備用客戶端重試
+            for fallback_client in [["android"], ["ios"], ["mweb"]]:
+                try:
+                    retry_opts = get_base_ydl_opts()
+                    retry_opts.update({
+                        "skip_download": True,
+                        "extract_flat": False,
+                        "format": "all",
+                        "extractor_args": {
+                            "youtube": {
+                                "player_client": fallback_client
+                            }
+                        }
+                    })
+                    with yt_dlp.YoutubeDL(retry_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        if info:
+                            return _parse_info_data(info, url)
+                except Exception:
+                    continue
+        raise e
 
 def download_video(url: str, format_type: str, quality: str, output_dir: str) -> str:
-    """Downloads video or audio and returns the generated absolute file path."""
+    """下載影片或音訊，支援自動重試與客戶端降級"""
     os.makedirs(output_dir, exist_ok=True)
     file_id = uuid.uuid4().hex[:8]
     out_template = os.path.join(output_dir, f"{file_id}_%(title).100B.%(ext)s")
@@ -194,19 +235,31 @@ def download_video(url: str, format_type: str, quality: str, output_dir: str) ->
         
         ydl_opts["merge_output_format"] = "mp4"
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        # Find the generated file with prefix file_id
-        for fname in os.listdir(output_dir):
-            if fname.startswith(file_id):
-                return os.path.join(output_dir, fname)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as e:
+        err_msg = str(e)
+        if "not a bot" in err_msg or "Sign in" in err_msg:
+            # 降級重試
+            retry_opts = ydl_opts.copy()
+            retry_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+            with yt_dlp.YoutubeDL(retry_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        else:
+            raise e
 
-        prepared = ydl.prepare_filename(info)
-        if os.path.exists(prepared):
-            return prepared
-        base, _ = os.path.splitext(prepared)
-        for ext in [".mp4", ".mp3", ".m4a", ".webm", ".mkv"]:
-            if os.path.exists(base + ext):
-                return base + ext
+    # 尋找產生檔案
+    for fname in os.listdir(output_dir):
+        if fname.startswith(file_id):
+            return os.path.join(output_dir, fname)
 
-        raise FileNotFoundError("檔案下載完成但找不到輸出檔案。")
+    prepared = ydl.prepare_filename(info)
+    if os.path.exists(prepared):
+        return prepared
+    base, _ = os.path.splitext(prepared)
+    for ext in [".mp4", ".mp3", ".m4a", ".webm", ".mkv"]:
+        if os.path.exists(base + ext):
+            return base + ext
+
+    raise FileNotFoundError("檔案下載完成但找不到輸出檔案。")
