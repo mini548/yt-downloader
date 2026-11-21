@@ -27,6 +27,33 @@ app.add_middleware(
 TEMP_DIR = os.path.join(os.path.dirname(__file__), "temp_downloads")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+pot_process = None
+
+@app.on_event("startup")
+async def startup_event():
+    global pot_process
+    bin_path = "/usr/local/bin/bgutil-pot"
+    if os.path.exists(bin_path):
+        import subprocess
+        try:
+            pot_process = subprocess.Popen(
+                [bin_path, "server", "--host", "127.0.0.1", "--port", "4416"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            print(f"[INFO] 成功啟動 PO Token Server (PID: {pot_process.pid})")
+        except Exception as e:
+            print(f"[WARN] 啟動 PO Token Server 失敗: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global pot_process
+    if pot_process:
+        try:
+            pot_process.terminate()
+        except Exception:
+            pass
+
 class InfoRequest(BaseModel):
     url: str
 
