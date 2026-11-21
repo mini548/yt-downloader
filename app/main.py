@@ -2,13 +2,15 @@ import os
 import asyncio
 import urllib.parse
 import urllib.request
+import time
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+import yt_dlp
 
-from .downloader import extract_video_info, download_video, sanitize_filename
+from .downloader import extract_video_info, download_video, sanitize_filename, get_base_ydl_opts
 
 app = FastAPI(
     title="YouTube Downloader Web App",
@@ -92,6 +94,47 @@ async def diag_check():
         "cookie_file_configured": cookie_exists,
         "proxy_configured": has_proxy
     }
+
+@app.get("/api/test_client")
+async def test_client(
+    url: str = Query("https://www.youtube.com/watch?v=jNQXAC9IVRw"),
+    client: str = Query("web"),
+    use_cookies: bool = Query(False)
+):
+    """快速測試特定客戶端的解析結果與詳細報錯"""
+    t0 = time.time()
+    opts = get_base_ydl_opts(client=client, with_cookies=use_cookies)
+    opts.update({
+        "skip_download": True,
+        "extract_flat": False,
+        "format": "all",
+        "socket_timeout": 5,
+        "retries": 1,
+    })
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            elapsed = round(time.time() - t0, 2)
+            formats = [f.get("format_id") for f in info.get("formats", []) if f.get("vcodec") != "none"]
+            return {
+                "success": True,
+                "elapsed_sec": elapsed,
+                "client": client,
+                "use_cookies": use_cookies,
+                "title": info.get("title"),
+                "video_formats_count": len(formats),
+                "example_formats": formats[:5]
+            }
+    except Exception as e:
+        elapsed = round(time.time() - t0, 2)
+        return {
+            "success": False,
+            "elapsed_sec": elapsed,
+            "client": client,
+            "use_cookies": use_cookies,
+            "error_type": type(e).__name__,
+            "error_msg": str(e)
+        }
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
