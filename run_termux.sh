@@ -17,7 +17,7 @@ REPO_DIR="$HOME/yt-downloader"
 
 if [ ! -d "$REPO_DIR" ]; then
     echo "[2/4] 正在下載下載站原始碼..."
-    git clone https://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@github.com/mini548/yt-downloader.git "$REPO_DIR"
+    git clone https://mini548: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@github.com/mini548/yt-downloader.git "$REPO_DIR"
 else
     echo "[2/4] 正在同步最新版本代碼..."
     cd "$REPO_DIR" && git pull
