@@ -1,6 +1,7 @@
 import os
 import asyncio
 import urllib.parse
+import urllib.request
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -69,6 +70,28 @@ def cleanup_file(filepath: str):
 @app.head("/api/health")
 async def health_check():
     return {"status": "ok", "service": "YouTube Downloader", "version": "1.0.0"}
+
+@app.get("/api/diag")
+async def diag_check():
+    """診斷端點：檢查內部 PO Token 伺服器狀態與環境設定"""
+    pot_status = "unavailable"
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=2) as r:
+            pot_status = r.read().decode()
+    except Exception as e:
+        pot_status = f"error: {str(e)}"
+
+    import yt_dlp.version
+    cookie_exists = os.path.exists("/app/cookies.txt") or os.path.exists("cookies.txt")
+    has_proxy = bool(os.environ.get("PROXY_URL") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"))
+
+    return {
+        "status": "ok",
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "pot_server_ping": pot_status,
+        "cookie_file_configured": cookie_exists,
+        "proxy_configured": has_proxy
+    }
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
