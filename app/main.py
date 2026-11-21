@@ -41,23 +41,21 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "3.1.0-deno"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "3.1.1"}
 
-@app.get("/api/debug_verbose")
-async def debug_verbose(vid: str = "jNQXAC9IVRw"):
+@app.get("/api/ping_yt")
+async def ping_yt():
     import subprocess
-    cmd = ["yt-dlp", "-v", "--simulate", f"https://www.youtube.com/watch?v={vid}"]
-    try:
-        res = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, timeout=25
-        )
-        return {
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-            "returncode": res.returncode
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    cmd_deno = ["deno", "--version"]
+    cmd_curl = ["curl", "-sI", "--connect-timeout", "5", "https://www.youtube.com"]
+    
+    deno_res = subprocess.run(cmd_deno, capture_output=True, text=True)
+    curl_res = subprocess.run(cmd_curl, capture_output=True, text=True)
+    
+    return {
+        "deno": deno_res.stdout.strip() if deno_res.returncode == 0 else f"ERR: {deno_res.stderr}",
+        "curl_yt": curl_res.stdout.strip() if curl_res.returncode == 0 else f"ERR: {curl_res.stderr}",
+    }
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
