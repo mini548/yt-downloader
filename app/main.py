@@ -52,6 +52,16 @@ async def ping_pot():
     except Exception as e:
         return {"pot_error": str(e)}
 
+@app.get("/api/test_pot_bin")
+async def test_pot_bin():
+    import subprocess
+    cmd = ["/usr/local/bin/bgutil-pot", "--help"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/api/ping_yt")
 async def ping_yt():
     import subprocess
