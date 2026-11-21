@@ -2,9 +2,45 @@ import os
 import shutil
 import uuid
 import re
+import time
+import http.cookiejar
+import urllib.request
+import tempfile
 from typing import Dict, Any, Optional
 import yt_dlp
 import imageio_ffmpeg
+
+GUEST_COOKIE_FILE = os.path.join(tempfile.gettempdir(), "yt_guest_cookies.txt")
+
+def ensure_guest_cookies() -> str:
+    """
+    Ensures a fresh, valid YouTube visitor/guest cookie file exists.
+    Guest cookies bypass datacenter bot detection and player response failures
+    without requiring personal login credentials that rotate and expire.
+    """
+    now = time.time()
+    # Refresh every 6 hours or if missing
+    if os.path.exists(GUEST_COOKIE_FILE) and (now - os.path.getmtime(GUEST_COOKIE_FILE)) < 21600:
+        return GUEST_COOKIE_FILE
+
+    try:
+        cj = http.cookiejar.MozillaCookieJar(GUEST_COOKIE_FILE)
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        req = urllib.request.Request(
+            "https://www.youtube.com",
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            }
+        )
+        with opener.open(req, timeout=10) as resp:
+            pass
+        cj.save(ignore_discard=True, ignore_expires=True)
+        print(f"[INFO] 成功產生 YouTube 訪客憑證: {GUEST_COOKIE_FILE}")
+        return GUEST_COOKIE_FILE
+    except Exception as e:
+        print(f"[WARN] 產生訪客憑證失敗: {e}")
+        return ""
 
 def get_ffmpeg_path() -> Optional[str]:
     """Finds ffmpeg from system PATH or falls back to imageio-ffmpeg binary."""
@@ -33,9 +69,7 @@ def sanitize_filename(name: str) -> str:
 
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Generates base yt-dlp options.
-    Uses mobile and multi-client APIs while skipping HTML webpage downloads
-    to bypass cloud datacenter IP 429/bot rate limits completely.
+    Generates base yt-dlp options with dynamic visitor session cookies.
     """
     ffmpeg_bin = get_ffmpeg_path()
     opts: Dict[str, Any] = {
@@ -43,15 +77,13 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         "no_warnings": True,
         "nocheckcertificate": True,
         "source_address": "0.0.0.0",
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "mweb"],
-                "player_skip": ["configs", "webpage"]
-            }
-        }
     }
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
+
+    cookie_file = ensure_guest_cookies()
+    if cookie_file and os.path.exists(cookie_file):
+        opts["cookiefile"] = cookie_file
 
     return opts
 
@@ -95,7 +127,6 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
                 "ext": "mp4"
             })
 
-    # Ensure at least one standard video option is available
     if len(video_options) == 1:
         video_options.append({"quality": "360", "label": "標準 (360p)", "ext": "mp4"})
 
