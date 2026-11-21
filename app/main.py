@@ -46,6 +46,7 @@ async def health_check():
 @app.get("/api/diag")
 async def diag_check():
     import urllib.request as ureq
+    import tempfile
     outbound_ip = "unknown"
     try:
         with ureq.urlopen("https://api.ipify.org", timeout=5) as r:
@@ -62,11 +63,47 @@ async def diag_check():
     ]
     existing_cookies = [cp for cp in cookie_candidates if os.path.exists(cp)]
 
+    # Test extraction directly on Render
+    test_results = {}
+    test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    
+    # Test A: Pure android client, no cookies
+    try:
+        import yt_dlp
+        opts_a = {
+            "quiet": True,
+            "format": "all",
+            "source_address": "0.0.0.0",
+            "extractor_args": {"youtube": {"player_client": ["android"]}}
+        }
+        with yt_dlp.YoutubeDL(opts_a) as ydl:
+            info_a = ydl.extract_info(test_url, download=False)
+            test_results["android_no_cookie"] = f"OK: {info_a.get('title')}"
+    except Exception as ea:
+        test_results["android_no_cookie"] = f"FAIL: {str(ea)}"
+
+    # Test B: With current cookie
+    try:
+        import yt_dlp
+        temp_cookie = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+        opts_b = {
+            "quiet": True,
+            "format": "all",
+            "cookiefile": temp_cookie,
+            "source_address": "0.0.0.0"
+        }
+        with yt_dlp.YoutubeDL(opts_b) as ydl:
+            info_b = ydl.extract_info(test_url, download=False)
+            test_results["with_cookie"] = f"OK: {info_b.get('title')}"
+    except Exception as eb:
+        test_results["with_cookie"] = f"FAIL: {str(eb)}"
+
     return {
         "outbound_ip": outbound_ip,
         "has_ytdlp_cookies_env": bool(cookies_env and cookies_env.strip()),
         "ytdlp_cookies_len": len(cookies_env) if cookies_env else 0,
         "existing_cookie_files": existing_cookies,
+        "test_results": test_results
     }
 
 @app.post("/api/info")
