@@ -27,7 +27,7 @@ REPO_DIR="$HOME/yt-downloader"
 
 if [ ! -d "$REPO_DIR" ]; then
     echo "[⚡] 正在下載專案程式庫..."
-    git clone https://mini548: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@github.com/mini548/yt-downloader.git "$REPO_DIR"
+    git clone https://github.com/mini548/yt-downloader.git "$REPO_DIR"
 else
     cd "$REPO_DIR"
     # 背景安靜檢查更新，不卡住啟動流程
