@@ -12,7 +12,7 @@ from .downloader import extract_video_info, download_video, sanitize_filename
 app = FastAPI(
     title="YouTube Downloader Web App",
     description="全球通用的 YouTube 高畫質影片與 MP3 下載服務",
-    version="1.0.0"
+    version="3.0.0"
 )
 
 # Enable CORS for all origins
@@ -41,39 +41,13 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "2.0.1-diag"}
-
-@app.get("/api/diag")
-async def diag_check():
-    cookies_env = os.environ.get("YTDLP_COOKIES")
-    return {
-        "has_ytdlp_cookies_env": bool(cookies_env and cookies_env.strip()),
-        "ytdlp_cookies_len": len(cookies_env) if cookies_env else 0,
-    }
-
-@app.get("/api/test_client")
-async def test_single_client(c: str = "web_embedded"):
-    import yt_dlp
-    opts = {
-        "quiet": True,
-        "format": "all",
-        "extractor_args": {"youtube": {"player_client": [c]}}
-    }
-    try:
-        def _extract():
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
-        info = await asyncio.to_thread(_extract)
-        return {"client": c, "status": "ok", "title": info.get("title")}
-    except Exception as e:
-        return {"client": c, "status": "error", "error": str(e)[:120]}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "3.0.0"}
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
     if not req.url or not req.url.strip():
         raise HTTPException(status_code=400, detail="請提供有效的 YouTube 影片網址。")
     try:
-        # Run synchronous yt-dlp call in threadpool
         info = await asyncio.to_thread(extract_video_info, req.url.strip())
         return info
     except Exception as e:
@@ -87,7 +61,6 @@ async def download_endpoint(
     quality: str = Query("1080", description="畫質 (例如 1080, 720) 或 音質 (例如 320, 192, m4a)")
 ):
     try:
-        # Run download in threadpool
         filepath = await asyncio.to_thread(
             download_video, url.strip(), format_type, quality, TEMP_DIR
         )
@@ -96,14 +69,11 @@ async def download_endpoint(
             raise HTTPException(status_code=500, detail="下載失敗，找不到產生的檔案。")
 
         filename = os.path.basename(filepath)
-        # Strip internal uuid prefix (8 chars + underscore)
         display_filename = filename[9:] if len(filename) > 9 and filename[8] == "_" else filename
         display_filename = sanitize_filename(display_filename)
 
-        # Encode filename for Content-Disposition (supports international characters)
         quoted_filename = urllib.parse.quote(display_filename)
 
-        # Set cleanup task
         background_tasks.add_task(cleanup_file, filepath)
 
         media_type = "video/mp4" if format_type == "video" else "audio/mpeg"
