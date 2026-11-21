@@ -41,7 +41,7 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "3.0.1"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "3.1.0-deno"}
 
 @app.get("/api/debug_verbose")
 async def debug_verbose(vid: str = "jNQXAC9IVRw"):
