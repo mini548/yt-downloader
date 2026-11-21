@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  yt-downloader:
+    build: .
+    container_name: yt-downloader-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+    volumes:
+      - ./app/temp_downloads:/app/app/temp_downloads
