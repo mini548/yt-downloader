@@ -32,7 +32,7 @@ def ensure_guest_cookies() -> str:
             pass
         cj.save(ignore_discard=True, ignore_expires=True)
         return GUEST_COOKIE_FILE
-    except Exception as e:
+    except Exception:
         return ""
 
 def get_cookie_file() -> Optional[str]:
@@ -77,20 +77,37 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 def get_base_ydl_opts(client: str = "android", with_cookies: bool = False) -> Dict[str, Any]:
-    """生成繞過機房阻擋、防卡頓與多客戶端支援的 yt-dlp 參數"""
+    """生成兼具防卡頓、逾時控制與多客戶端支援的 yt-dlp 參數"""
     ffmpeg_bin = get_ffmpeg_path()
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
         "source_address": "0.0.0.0",
+        "socket_timeout": 10,
+        "retries": 2,
         "extractor_args": {
             "youtube": {
-                "player_skip": ["configs", "webpage"],
                 "player_client": [client]
             }
         }
     }
+
+    # Android 客戶端跳過網頁載入可提速且避開網頁層 429
+    if client == "android":
+        opts["extractor_args"]["youtube"]["player_skip"] = ["configs", "webpage"]
+
+    # 針對 Web / mWeb 客戶端配置本機 bgutil-pot PO Token Provider
+    if client in ("web", "mweb"):
+        opts["extractor_args"]["youtubepot-bgutilhttp"] = {
+            "base_url": ["http://127.0.0.1:4416"]
+        }
+
+    # 代理設定支援 (若環境變數提供 Proxy)
+    proxy = os.environ.get("PROXY_URL") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    if proxy:
+        opts["proxy"] = proxy
+
     if ffmpeg_bin:
         opts["ffmpeg_location"] = ffmpeg_bin
 
@@ -164,8 +181,17 @@ def _parse_info_data(info: Dict[str, Any], url: str) -> Dict[str, Any]:
     }
 
 def extract_video_info(url: str) -> Dict[str, Any]:
-    """優先使用原生行動端客戶端 (最速、免驗證碼、避開機房 429 與 SABR)"""
-    for client, use_cookies in [("android", False), ("ios", False), ("mweb", True), ("web", True)]:
+    """支援智慧多層客戶端降級（Android -> Web+POT -> iOS -> mWeb -> Web+Cookies）"""
+    client_matrix = [
+        ("android", False),
+        ("web", False),
+        ("ios", False),
+        ("mweb", False),
+        ("web", True),
+    ]
+
+    last_error = None
+    for client, use_cookies in client_matrix:
         try:
             ydl_opts = get_base_ydl_opts(client=client, with_cookies=use_cookies)
             ydl_opts.update({
@@ -177,10 +203,12 @@ def extract_video_info(url: str) -> Dict[str, Any]:
                 info = ydl.extract_info(url, download=False)
                 if info:
                     return _parse_info_data(info, url)
-        except Exception:
+        except Exception as e:
+            last_error = e
             continue
 
-    raise ValueError("無法解析影片資訊，請確認網址是否正確。")
+    err_msg = str(last_error) if last_error else "請確認網址是否正確。"
+    raise ValueError(f"無法解析影片資訊: {err_msg}")
 
 def download_video(url: str, format_type: str, quality: str, output_dir: str) -> str:
     """下載影片或音訊，支援多層客戶端智慧降級重試"""
@@ -189,7 +217,7 @@ def download_video(url: str, format_type: str, quality: str, output_dir: str) ->
     out_template = os.path.join(output_dir, f"{file_id}_%(title).100B.%(ext)s")
 
     def _build_opts(client: str, use_cookies: bool):
-        opts = get_base_ydl_opts(client=client, with_cookies=use_cookies)
+        opts = get_base_ydl_opts(client=client, use_cookies=use_cookies)
         opts["outtmpl"] = out_template
 
         if format_type == "audio":
@@ -217,7 +245,15 @@ def download_video(url: str, format_type: str, quality: str, output_dir: str) ->
 
     info = None
     last_err = None
-    for client, use_cookies in [("android", False), ("ios", False), ("mweb", True), ("web", True)]:
+    client_matrix = [
+        ("android", False),
+        ("web", False),
+        ("ios", False),
+        ("mweb", False),
+        ("web", True),
+    ]
+
+    for client, use_cookies in client_matrix:
         try:
             ydl_opts = _build_opts(client=client, use_cookies=use_cookies)
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
