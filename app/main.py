@@ -41,16 +41,56 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "4.1.0-pot-server"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "4.2.0-auto-pot"}
+
+pot_process = None
+
+@app.on_event("startup")
+async def start_pot_server():
+    global pot_process
+    bin_path = "/usr/local/bin/bgutil-pot"
+    if os.path.exists(bin_path):
+        import subprocess
+        try:
+            pot_process = subprocess.Popen(
+                [bin_path, "server", "--host", "127.0.0.1", "--port", "4416"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            print(f"[INFO] 成功啟動 PO Token Server (PID {pot_process.pid})！")
+        except Exception as e:
+            print(f"[WARN] 啟動 PO Token Server 失敗: {e}")
 
 @app.get("/api/ping_pot")
 async def ping_pot():
     import urllib.request
+    global pot_process
+    poll_code = pot_process.poll() if pot_process else None
+    process_info = {
+        "running": pot_process is not None and poll_code is None,
+        "pid": pot_process.pid if pot_process else None,
+        "returncode": poll_code,
+    }
     try:
         with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=3) as resp:
-            return {"pot_status": resp.status, "pot_body": resp.read().decode()}
+            return {
+                "process": process_info,
+                "pot_status": resp.status,
+                "pot_body": resp.read().decode()
+            }
     except Exception as e:
-        return {"pot_error": str(e)}
+        stderr_output = ""
+        if pot_process and pot_process.stderr:
+            try:
+                stderr_output = pot_process.stderr.read()
+            except Exception:
+                pass
+        return {
+            "process": process_info,
+            "stderr": stderr_output,
+            "pot_error": str(e)
+        }
 
 @app.get("/api/test_pot_bin")
 async def test_pot_bin():
