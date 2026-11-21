@@ -41,7 +41,28 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "4.2.0-auto-pot"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "4.3.0-pot-extract"}
+
+@app.get("/api/test_pot_extract")
+async def test_pot_extract(vid: str = "jNQXAC9IVRw"):
+    import yt_dlp
+    opts = {
+        "quiet": True,
+        "format": "all",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["mweb", "web"]
+            }
+        }
+    }
+    try:
+        def _run():
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
+        info = await asyncio.to_thread(_run)
+        return {"status": "ok", "title": info.get("title"), "formats": len(info.get("formats", []))}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 pot_process = None
 
