@@ -41,7 +41,33 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "2.0.0-android"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "2.0.1-diag"}
+
+@app.get("/api/diag")
+async def diag_check():
+    import urllib.request as ureq
+    outbound_ip = "unknown"
+    try:
+        with ureq.urlopen("https://api.ipify.org", timeout=5) as r:
+            outbound_ip = r.read().decode().strip()
+    except Exception as e:
+        outbound_ip = str(e)
+
+    cookies_env = os.environ.get("YTDLP_COOKIES")
+    cookie_candidates = [
+        os.path.join(os.path.dirname(__file__), "cookies.txt"),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt"),
+        os.path.abspath("cookies.txt"),
+        "cookies.txt"
+    ]
+    existing_cookies = [cp for cp in cookie_candidates if os.path.exists(cp)]
+
+    return {
+        "outbound_ip": outbound_ip,
+        "has_ytdlp_cookies_env": bool(cookies_env and cookies_env.strip()),
+        "ytdlp_cookies_len": len(cookies_env) if cookies_env else 0,
+        "existing_cookie_files": existing_cookies,
+    }
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
