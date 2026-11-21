@@ -41,7 +41,7 @@ def cleanup_file(filepath: str):
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "YouTube Downloader", "version": "3.2.0-visitor"}
+    return {"status": "ok", "service": "YouTube Downloader", "version": "4.0.0-pot"}
 
 @app.get("/api/ping_yt")
 async def ping_yt():
